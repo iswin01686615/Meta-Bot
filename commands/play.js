@@ -6,40 +6,13 @@ import {
     AudioPlayerStatus,
     NoSubscriberBehavior,
 } from "@discordjs/voice";
-import ytdl from "@distube/ytdl-core";
+import ytdl from "@distube/ytdl-core"; // ✅ Dùng bản ổn định hơn
 import ytSearch from "yt-search";
 import ffmpeg from "ffmpeg-static";
 import { spawn } from "child_process";
 
 // ==============================
-// 🔧 Load Cookie YouTube (theo format mới)
-// ==============================
-try {
-    if (process.env.YT_COOKIE) {
-        // Parse cookie dạng "A=B; C=D" thành array [{ name, value }]
-        const cookieArray = process.env.YT_COOKIE.split(";").map((c) => {
-            const [name, ...rest] = c.trim().split("=");
-            return { name, value: rest.join("=") };
-        });
-
-        // Áp dụng cookie cho ytdl-core
-        ytdl.cookies.set(cookieArray);
-        console.log("✅ YT_COOKIE loaded with new format");
-    } else {
-        console.warn("⚠️ YT_COOKIE not set — YouTube may block some videos");
-    }
-} catch (e) {
-    console.error("❌ Failed to set YouTube cookie:", e);
-}
-
-// 🩹 Optional patch — reset decipher cache để parse lại player script mới
-try {
-    ytdl.cache?.disciphers?.clear?.();
-    console.log("🧩 Cleared old decipher cache");
-} catch {}
-
-// ==============================
-// 🗂️ Hệ thống hàng chờ phát nhạc
+// 🧱 Hệ thống hàng chờ phát nhạc
 // ==============================
 const queue = new Map();
 
@@ -68,15 +41,10 @@ export default {
         await interaction.deferReply();
 
         try {
-            // =========================
-            // 🔍 Tìm kiếm / lấy video
-            // =========================
             let videoUrl, title;
 
             if (ytdl.validateURL(query)) {
-                // ✅ Nếu là link YouTube
-                videoUrl = query;
-                const info = await ytdl.getInfo(videoUrl, {
+                const info = await ytdl.getInfo(query, {
                     requestOptions: {
                         headers: {
                             cookie: process.env.YT_COOKIE || "",
@@ -85,9 +53,9 @@ export default {
                         },
                     },
                 });
+                videoUrl = query;
                 title = info.videoDetails.title;
             } else {
-                // 🔎 Nếu là từ khóa → tìm video đầu tiên
                 const result = await ytSearch(query);
                 const video = result.videos.length > 0 ? result.videos[0] : null;
 
@@ -102,9 +70,6 @@ export default {
             const song = { title, url: videoUrl };
             let serverQueue = queue.get(interaction.guild.id);
 
-            // =========================
-            // 🧱 Quản lý hàng chờ
-            // =========================
             if (!serverQueue) {
                 const queueConstruct = {
                     voiceChannel,
@@ -152,9 +117,6 @@ async function playSong(interaction, song) {
     try {
         console.log("🎵 Phát:", song.title);
 
-        // =========================
-        // 🔊 Lấy stream + ffmpeg decode
-        // =========================
         const stream = ytdl(song.url, {
             filter: "audioonly",
             quality: "highestaudio",
@@ -197,7 +159,6 @@ async function playSong(interaction, song) {
             `⚠️ Không thể phát bài hát: **${song?.title || "Không xác định"}**`
         );
 
-        // Bỏ qua bài lỗi và phát bài tiếp
         serverQueue.songs.shift();
         playSong(interaction, serverQueue.songs[0]);
     }
