@@ -12,12 +12,19 @@ import ffmpeg from "ffmpeg-static";
 import { spawn } from "child_process";
 
 // ==============================
-// 🔧 Load Cookie YouTube (nếu có)
+// 🔧 Load Cookie YouTube (theo format mới)
 // ==============================
 try {
     if (process.env.YT_COOKIE) {
-        ytdl.updateCookies([{ name: "Cookie", value: process.env.YT_COOKIE }]);
-        console.log("✅ YT_COOKIE loaded successfully");
+        // Parse cookie dạng "A=B; C=D" thành array [{ name, value }]
+        const cookieArray = process.env.YT_COOKIE.split(";").map((c) => {
+            const [name, ...rest] = c.trim().split("=");
+            return { name, value: rest.join("=") };
+        });
+
+        // Áp dụng cookie cho ytdl-core
+        ytdl.cookies.set(cookieArray);
+        console.log("✅ YT_COOKIE loaded with new format");
     } else {
         console.warn("⚠️ YT_COOKIE not set — YouTube may block some videos");
     }
@@ -25,6 +32,15 @@ try {
     console.error("❌ Failed to set YouTube cookie:", e);
 }
 
+// 🩹 Optional patch — reset decipher cache để parse lại player script mới
+try {
+    ytdl.cache?.disciphers?.clear?.();
+    console.log("🧩 Cleared old decipher cache");
+} catch {}
+
+// ==============================
+// 🗂️ Hệ thống hàng chờ phát nhạc
+// ==============================
 const queue = new Map();
 
 export default {
@@ -44,7 +60,7 @@ export default {
 
         if (!voiceChannel) {
             return interaction.reply({
-                content: "🚫 Bạn phải tham gia kênh thoại trước khi phát nhạc!",
+                content: "🚫 Bạn phải vào kênh thoại trước khi phát nhạc!",
                 ephemeral: true,
             });
         }
@@ -121,9 +137,9 @@ export default {
     },
 };
 
-// =========================
+// ==============================
 // 🎧 Hàm phát nhạc chính
-// =========================
+// ==============================
 async function playSong(interaction, song) {
     const serverQueue = queue.get(interaction.guild.id);
     if (!song) {
@@ -153,7 +169,6 @@ async function playSong(interaction, song) {
             },
         });
 
-        // ✅ Chạy ffmpeg-static để decode stream (fix FFmpeg missing)
         const ffmpegProcess = spawn(ffmpeg, [
             "-i", "pipe:0",
             "-analyzeduration", "0",
