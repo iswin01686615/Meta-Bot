@@ -9,14 +9,21 @@ import {
 import play from "play-dl";
 
 // ==============================
-// 🔧 Gắn cookie YouTube (nếu có)
+// 🔧 GẮN COOKIE YOUTUBE (NẾU CÓ)
 // ==============================
-if (process.env.YT_COOKIE) {
-    play.setToken({
-        youtube: {
-            cookie: process.env.YT_COOKIE,
-        },
-    });
+try {
+    if (process.env.YT_COOKIE) {
+        play.setToken({
+            youtube: {
+                cookie: process.env.YT_COOKIE,
+            },
+        });
+        console.log("✅ YT_COOKIE loaded");
+    } else {
+        console.log("⚠️ YT_COOKIE not set");
+    }
+} catch (e) {
+    console.error("❌ Cookie setup failed:", e);
 }
 
 const queue = new Map();
@@ -48,33 +55,42 @@ export default {
         try {
             let songInfo;
             let videoUrl;
+            let videoId;
 
             // ==============================
-            // 🔍 Kiểm tra query là link hay từ khoá
+            // 🔍 Kiểm tra query là link hay từ khóa
             // ==============================
-            if (play.yt_validate(query) === "video") {
-                songInfo = await play.video_info(query);
-                videoUrl = songInfo.video_details.url || query;
+            const validation = play.yt_validate(query);
+
+            if (validation === "video") {
+                // Nếu là link video YouTube
+                songInfo = await safeVideoInfo(query);
+                videoId = songInfo?.video_details?.id;
+                videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
             } else {
+                // Nếu là từ khóa → tìm kiếm video đầu tiên
                 const searched = await play.search(query, { limit: 1 });
                 if (!searched.length) {
                     return interaction.editReply("❌ Không tìm thấy bài hát nào.");
                 }
 
-                // Fix “undefined URL” — tự build lại link nếu thiếu
-                const first = searched[0];
-                videoUrl = first.url || `https://www.youtube.com/watch?v=${first.id}`;
-                songInfo = await play.video_info(videoUrl);
+                videoId = searched[0].id || searched[0].url?.split("v=")[1];
+                videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+                songInfo = await safeVideoInfo(videoUrl);
             }
 
+            // ==============================
+            // 🧩 Tạo object bài hát
+            // ==============================
+            const details = songInfo?.video_details || {};
             const song = {
-                title: songInfo.video_details.title,
+                title: details.title || "Không rõ tên bài hát",
                 url: videoUrl,
-                duration: songInfo.video_details.durationRaw,
+                duration: details.durationRaw || "Không rõ thời lượng",
             };
 
             // ==============================
-            // 🎶 Quản lý hàng chờ
+            // 🎶 Hàng chờ phát nhạc
             // ==============================
             let serverQueue = queue.get(interaction.guild.id);
 
@@ -98,7 +114,6 @@ export default {
                 });
 
                 queueConstruct.connection = connection;
-
                 await playSong(interaction, queueConstruct.songs[0]);
             } else {
                 serverQueue.songs.push(song);
@@ -112,7 +127,7 @@ export default {
 };
 
 // ==============================
-// 🎵 Hàm phát nhạc chính
+// 🎵 HÀM PHÁT NHẠC CHÍNH
 // ==============================
 async function playSong(interaction, song) {
     const serverQueue = queue.get(interaction.guild.id);
@@ -124,6 +139,10 @@ async function playSong(interaction, song) {
     }
 
     try {
+        if (!song.url || !song.url.startsWith("http")) {
+            throw new Error("URL không hợp lệ: " + song.url);
+        }
+
         const stream = await play.stream(song.url);
         const resource = createAudioResource(stream.stream, {
             inputType: stream.type,
@@ -140,8 +159,31 @@ async function playSong(interaction, song) {
         });
     } catch (error) {
         console.error("❌ Lỗi khi phát bài:", error);
-        await interaction.editReply("⚠️ Không thể phát bài hát này!");
+        await interaction.editReply(
+            `⚠️ Không thể phát bài hát: **${song?.title || "Không xác định"}**`
+        );
         serverQueue.songs.shift();
         playSong(interaction, serverQueue.songs[0]);
+    }
+}
+
+// ==============================
+// 🧠 SAFE VIDEO INFO WRAPPER
+// ==============================
+// Bọc play.video_info() để tránh JSON parse lỗi (Unexpected character)
+async function safeVideoInfo(url) {
+    try {
+        return await play.video_info(url);
+    } catch (err) {
+        console.warn("⚠️ play.video_info thất bại, dùng fallback:", err.message);
+        // fallback tối thiểu để vẫn phát được
+        const videoId = url.split("v=")[1];
+        return {
+            video_details: {
+                id: videoId,
+                title: "Video không xác định",
+                durationRaw: "Không rõ",
+            },
+        };
     }
 }
