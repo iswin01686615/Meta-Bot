@@ -9,7 +9,7 @@ import {
 import play from "play-dl";
 
 // ==============================
-// 🔧 GẮN COOKIE YOUTUBE (NẾU CÓ)
+// 🔧 COOKIE & PHIÊN BẢN YOUTUBE
 // ==============================
 try {
     if (process.env.YT_COOKIE) {
@@ -23,7 +23,7 @@ try {
         console.log("⚠️ YT_COOKIE not set");
     }
 } catch (e) {
-    console.error("❌ Cookie setup failed:", e);
+    console.error("Cookie setup failed:", e);
 }
 
 const queue = new Map();
@@ -53,44 +53,35 @@ export default {
         await interaction.deferReply();
 
         try {
-            let songInfo;
-            let videoUrl;
-            let videoId;
-
             // ==============================
-            // 🔍 Kiểm tra query là link hay từ khóa
+            // 🔍 Tìm kiếm video YouTube
             // ==============================
             const validation = play.yt_validate(query);
+            let videoUrl, title;
 
             if (validation === "video") {
-                // Nếu là link video YouTube
-                songInfo = await safeVideoInfo(query);
-                videoId = songInfo?.video_details?.id;
-                videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
+                // là link trực tiếp
+                videoUrl = query;
+                title = "Video từ link";
             } else {
-                // Nếu là từ khóa → tìm kiếm video đầu tiên
+                // tìm video đầu tiên
                 const searched = await play.search(query, { limit: 1 });
                 if (!searched.length) {
                     return interaction.editReply("❌ Không tìm thấy bài hát nào.");
                 }
 
-                videoId = searched[0].id || searched[0].url?.split("v=")[1];
-                videoUrl = `https://www.youtube.com/watch?v=${videoId}`;
-                songInfo = await safeVideoInfo(videoUrl);
+                const first = searched[0];
+                title = first.title;
+                videoUrl = first.url || `https://www.youtube.com/watch?v=${first.id}`;
             }
 
             // ==============================
-            // 🧩 Tạo object bài hát
+            // 🧩 Tạo đối tượng bài hát
             // ==============================
-            const details = songInfo?.video_details || {};
-            const song = {
-                title: details.title || "Không rõ tên bài hát",
-                url: videoUrl,
-                duration: details.durationRaw || "Không rõ thời lượng",
-            };
+            const song = { title, url: videoUrl };
 
             // ==============================
-            // 🎶 Hàng chờ phát nhạc
+            // 🎶 Quản lý hàng chờ
             // ==============================
             let serverQueue = queue.get(interaction.guild.id);
 
@@ -143,7 +134,10 @@ async function playSong(interaction, song) {
             throw new Error("URL không hợp lệ: " + song.url);
         }
 
-        const stream = await play.stream(song.url);
+        // ==============================
+        // ⚙️ LẤY STREAM TRỰC TIẾP BẰNG play-dl
+        // ==============================
+        const stream = await play.stream(song.url, { quality: 2 });
         const resource = createAudioResource(stream.stream, {
             inputType: stream.type,
         });
@@ -164,26 +158,5 @@ async function playSong(interaction, song) {
         );
         serverQueue.songs.shift();
         playSong(interaction, serverQueue.songs[0]);
-    }
-}
-
-// ==============================
-// 🧠 SAFE VIDEO INFO WRAPPER
-// ==============================
-// Bọc play.video_info() để tránh JSON parse lỗi (Unexpected character)
-async function safeVideoInfo(url) {
-    try {
-        return await play.video_info(url);
-    } catch (err) {
-        console.warn("⚠️ play.video_info thất bại, dùng fallback:", err.message);
-        // fallback tối thiểu để vẫn phát được
-        const videoId = url.split("v=")[1];
-        return {
-            video_details: {
-                id: videoId,
-                title: "Video không xác định",
-                durationRaw: "Không rõ",
-            },
-        };
     }
 }
