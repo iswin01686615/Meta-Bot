@@ -9,7 +9,7 @@ import {
 import play from "play-dl";
 
 // ==============================
-// 🔧 FIX 1: Thêm cookie YouTube
+// 🔧 Gắn cookie YouTube (nếu có)
 // ==============================
 if (process.env.YT_COOKIE) {
     play.setToken({
@@ -36,9 +36,6 @@ export default {
         const query = interaction.options.getString("query");
         const voiceChannel = interaction.member.voice.channel;
 
-        // ==============================
-        // 🧩 Kiểm tra người dùng
-        // ==============================
         if (!voiceChannel) {
             return interaction.reply({
                 content: "🚫 Bạn phải vào kênh thoại trước!",
@@ -46,34 +43,38 @@ export default {
             });
         }
 
-        // ==============================
-        // 🕓 Trì hoãn phản hồi (để tránh lỗi reply)
-        // ==============================
         await interaction.deferReply();
 
         try {
-            // ==============================
-            // 🔍 Tìm bài hát
-            // ==============================
             let songInfo;
+            let videoUrl;
+
+            // ==============================
+            // 🔍 Kiểm tra query là link hay từ khoá
+            // ==============================
             if (play.yt_validate(query) === "video") {
                 songInfo = await play.video_info(query);
+                videoUrl = songInfo.video_details.url || query;
             } else {
                 const searched = await play.search(query, { limit: 1 });
                 if (!searched.length) {
                     return interaction.editReply("❌ Không tìm thấy bài hát nào.");
                 }
-                songInfo = await play.video_info(searched[0].url);
+
+                // Fix “undefined URL” — tự build lại link nếu thiếu
+                const first = searched[0];
+                videoUrl = first.url || `https://www.youtube.com/watch?v=${first.id}`;
+                songInfo = await play.video_info(videoUrl);
             }
 
             const song = {
                 title: songInfo.video_details.title,
-                url: songInfo.video_details.url,
+                url: videoUrl,
                 duration: songInfo.video_details.durationRaw,
             };
 
             // ==============================
-            // 🎶 Hàng chờ phát nhạc
+            // 🎶 Quản lý hàng chờ
             // ==============================
             let serverQueue = queue.get(interaction.guild.id);
 
@@ -98,37 +99,31 @@ export default {
 
                 queueConstruct.connection = connection;
 
-                // Bắt đầu phát bài hát đầu tiên
                 await playSong(interaction, queueConstruct.songs[0]);
             } else {
                 serverQueue.songs.push(song);
-                await interaction.editReply(
-                    `✅ **${song.title}** đã được thêm vào hàng chờ!`
-                );
+                await interaction.editReply(`✅ Thêm vào hàng chờ: **${song.title}**`);
             }
         } catch (err) {
-            console.error("❌ Lỗi phát nhạc:", err);
+            console.error("🚫 Lỗi khi xử lý yêu cầu phát nhạc:", err);
             await interaction.editReply("⚠️ Có lỗi xảy ra khi phát nhạc!");
         }
     },
 };
 
 // ==============================
-// 🎵 Hàm phát nhạc
+// 🎵 Hàm phát nhạc chính
 // ==============================
 async function playSong(interaction, song) {
     const serverQueue = queue.get(interaction.guild.id);
     if (!song) {
         serverQueue.connection.destroy();
         queue.delete(interaction.guild.id);
-        await interaction.editReply("✅ Đã phát xong danh sách!");
+        await interaction.editReply("✅ Danh sách phát đã hết!");
         return;
     }
 
     try {
-        // ==============================
-        // 🔊 Lấy stream nhạc từ YouTube
-        // ==============================
         const stream = await play.stream(song.url);
         const resource = createAudioResource(stream.stream, {
             inputType: stream.type,
@@ -139,14 +134,13 @@ async function playSong(interaction, song) {
 
         await interaction.editReply(`🎵 Đang phát: **${song.title}**`);
 
-        // Khi bài hát kết thúc → chuyển bài tiếp theo
         serverQueue.player.once(AudioPlayerStatus.Idle, () => {
             serverQueue.songs.shift();
             playSong(interaction, serverQueue.songs[0]);
         });
     } catch (error) {
-        console.error("🚫 Lỗi khi phát bài:", error);
-        await interaction.editReply("❌ Không thể phát bài hát này!");
+        console.error("❌ Lỗi khi phát bài:", error);
+        await interaction.editReply("⚠️ Không thể phát bài hát này!");
         serverQueue.songs.shift();
         playSong(interaction, serverQueue.songs[0]);
     }
