@@ -1,21 +1,40 @@
-import { REST, Routes } from "discord.js";
-import "dotenv/config";
-import fs from "fs";
+require("dotenv").config();
+const fs = require("fs");
+const path = require("path");
+const { REST, Routes } = require("discord.js");
 
+// Lấy dữ liệu commands từ thư mục src/commands
 const commands = [];
-const commandFiles = fs.readdirSync("./commands").filter(file => file.endsWith(".js"));
+const commandsPath = path.join(__dirname, "src", "commands");
+const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith(".js"));
 
 for (const file of commandFiles) {
-    const command = await import(`./commands/${file}`);
-    commands.push(command.default.data.toJSON());
+    const filePath = path.join(commandsPath, file);
+    const command = require(filePath);
+
+    if (command.data) {
+        console.log("🧾 Đăng ký:", command.data.name);
+        commands.push(command.data.toJSON());
+    } else {
+        console.warn(`⚠️ Bỏ qua ${file} vì thiếu .data`);
+    }
 }
 
+// REST client
 const rest = new REST({ version: "10" }).setToken(process.env.DISCORD_TOKEN);
 
-try {
-    console.log("🚀 Deploying slash commands...");
-    await rest.put(Routes.applicationCommands(process.env.CLIENT_ID), { body: commands });
-    console.log("✅ Slash commands deployed successfully!");
-} catch (error) {
-    console.error(error);
-}
+// Deploy commands theo GUILD để thấy ngay
+(async () => {
+    try {
+        console.log("🔄 Đang deploy slash commands (guild)...");
+
+        await rest.put(
+            Routes.applicationGuildCommands(process.env.CLIENT_ID, process.env.GUILD_ID),
+            { body: commands }
+        );
+
+        console.log("✅ Đã deploy lệnh cho guild thành công.");
+    } catch (error) {
+        console.error("❌ Lỗi khi deploy:", error);
+    }
+})();
