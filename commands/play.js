@@ -6,25 +6,8 @@ import {
     AudioPlayerStatus,
     NoSubscriberBehavior,
 } from "@discordjs/voice";
-import play from "play-dl";
-
-// ==============================
-// 🔧 COOKIE & PHIÊN BẢN YOUTUBE
-// ==============================
-try {
-    if (process.env.YT_COOKIE) {
-        play.setToken({
-            youtube: {
-                cookie: process.env.YT_COOKIE,
-            },
-        });
-        console.log("✅ YT_COOKIE loaded");
-    } else {
-        console.log("⚠️ YT_COOKIE not set");
-    }
-} catch (e) {
-    console.error("Cookie setup failed:", e);
-}
+import ytdl from "ytdl-core";
+import ytSearch from "yt-search";
 
 const queue = new Map();
 
@@ -54,30 +37,29 @@ export default {
 
         try {
             // ==============================
-            // 🔍 Tìm kiếm video YouTube
+            // 🔍 Tìm video
             // ==============================
-            const validation = play.yt_validate(query);
-            let videoUrl, title;
+            let videoUrl;
+            let title;
 
-            if (validation === "video") {
-                // là link trực tiếp
+            if (ytdl.validateURL(query)) {
+                // Là link YouTube hợp lệ
                 videoUrl = query;
-                title = "Video từ link";
+                const info = await ytdl.getInfo(videoUrl);
+                title = info.videoDetails.title;
             } else {
-                // tìm video đầu tiên
-                const searched = await play.search(query, { limit: 1 });
-                if (!searched.length) {
+                // Tìm kiếm theo từ khoá
+                const result = await ytSearch(query);
+                const video = result.videos.length > 0 ? result.videos[0] : null;
+
+                if (!video) {
                     return interaction.editReply("❌ Không tìm thấy bài hát nào.");
                 }
 
-                const first = searched[0];
-                title = first.title;
-                videoUrl = first.url || `https://www.youtube.com/watch?v=${first.id}`;
+                videoUrl = video.url;
+                title = video.title;
             }
 
-            // ==============================
-            // 🧩 Tạo đối tượng bài hát
-            // ==============================
             const song = { title, url: videoUrl };
 
             // ==============================
@@ -118,7 +100,7 @@ export default {
 };
 
 // ==============================
-// 🎵 HÀM PHÁT NHẠC CHÍNH
+// 🎵 HÀM PHÁT NHẠC
 // ==============================
 async function playSong(interaction, song) {
     const serverQueue = queue.get(interaction.guild.id);
@@ -130,18 +112,15 @@ async function playSong(interaction, song) {
     }
 
     try {
-        if (!song.url || !song.url.startsWith("http")) {
-            throw new Error("URL không hợp lệ: " + song.url);
-        }
+        console.log("🎧 Streaming:", song.url);
 
-        // ==============================
-        // ⚙️ LẤY STREAM TRỰC TIẾP BẰNG play-dl
-        // ==============================
-        const stream = await play.stream(song.url, { quality: 2 });
-        const resource = createAudioResource(stream.stream, {
-            inputType: stream.type,
+        const stream = ytdl(song.url, {
+            filter: "audioonly",
+            quality: "highestaudio",
+            highWaterMark: 1 << 25, // giảm lag buffer
         });
 
+        const resource = createAudioResource(stream);
         serverQueue.player.play(resource);
         serverQueue.connection.subscribe(serverQueue.player);
 
