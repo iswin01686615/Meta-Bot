@@ -6,13 +6,24 @@ import {
     AudioPlayerStatus,
     NoSubscriberBehavior,
 } from "@discordjs/voice";
-import ytdl from "@distube/ytdl-core"; // ✅ Dùng bản ổn định hơn
+import ytdl from "@distube/ytdl-core";
 import ytSearch from "yt-search";
 import ffmpeg from "ffmpeg-static";
 import { spawn } from "child_process";
 
 // ==============================
-// 🧱 Hệ thống hàng chờ phát nhạc
+// 🍪 Parse cookie từ Railway env
+// ==============================
+const parseCookies = (cookieStr = "") =>
+    cookieStr.split(";").map((c) => {
+        const [name, ...rest] = c.trim().split("=");
+        return { name, value: rest.join("=") };
+    });
+
+const YT_COOKIES = parseCookies(process.env.YT_COOKIE);
+
+// ==============================
+// 🗂️ Hệ thống hàng chờ phát nhạc
 // ==============================
 const queue = new Map();
 
@@ -41,19 +52,22 @@ export default {
         await interaction.deferReply();
 
         try {
+            // =========================
+            // 🔍 Tìm kiếm / lấy video
+            // =========================
             let videoUrl, title;
 
             if (ytdl.validateURL(query)) {
-                const info = await ytdl.getInfo(query, {
+                videoUrl = query;
+                const info = await ytdl.getInfo(videoUrl, {
                     requestOptions: {
+                        cookies: YT_COOKIES,
                         headers: {
-                            cookie: process.env.YT_COOKIE || "",
-                            "User-Agent":
-                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+                            "User-Agent": "Mozilla/5.0",
+                            "Accept-Language": "en-US,en;q=0.9",
                         },
                     },
                 });
-                videoUrl = query;
                 title = info.videoDetails.title;
             } else {
                 const result = await ytSearch(query);
@@ -70,6 +84,9 @@ export default {
             const song = { title, url: videoUrl };
             let serverQueue = queue.get(interaction.guild.id);
 
+            // =========================
+            // 🧱 Quản lý hàng chờ
+            // =========================
             if (!serverQueue) {
                 const queueConstruct = {
                     voiceChannel,
@@ -122,24 +139,33 @@ async function playSong(interaction, song) {
             quality: "highestaudio",
             highWaterMark: 1 << 25,
             requestOptions: {
+                cookies: YT_COOKIES,
                 headers: {
-                    cookie: process.env.YT_COOKIE || "",
-                    "User-Agent":
-                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+                    "User-Agent": "Mozilla/5.0",
                     "Accept-Language": "en-US,en;q=0.9",
                 },
             },
         });
 
-        const ffmpegProcess = spawn(ffmpeg, [
-            "-i", "pipe:0",
-            "-analyzeduration", "0",
-            "-loglevel", "0",
-            "-f", "s16le",
-            "-ar", "48000",
-            "-ac", "2",
-            "pipe:1",
-        ], { stdio: ["pipe", "pipe", "ignore"] });
+        const ffmpegProcess = spawn(
+            ffmpeg,
+            [
+                "-i",
+                "pipe:0",
+                "-analyzeduration",
+                "0",
+                "-loglevel",
+                "0",
+                "-f",
+                "s16le",
+                "-ar",
+                "48000",
+                "-ac",
+                "2",
+                "pipe:1",
+            ],
+            { stdio: ["pipe", "pipe", "ignore"] }
+        );
 
         stream.pipe(ffmpegProcess.stdin);
 
