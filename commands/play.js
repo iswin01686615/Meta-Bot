@@ -8,6 +8,22 @@ import {
 } from "@discordjs/voice";
 import ytdl from "@distube/ytdl-core";
 import ytSearch from "yt-search";
+import ffmpeg from "ffmpeg-static";
+import { spawn } from "child_process";
+
+// ==============================
+// 🔧 Load Cookie YouTube (nếu có)
+// ==============================
+try {
+    if (process.env.YT_COOKIE) {
+        ytdl.updateCookies([{ name: "Cookie", value: process.env.YT_COOKIE }]);
+        console.log("✅ YT_COOKIE loaded successfully");
+    } else {
+        console.warn("⚠️ YT_COOKIE not set — YouTube may block some videos");
+    }
+} catch (e) {
+    console.error("❌ Failed to set YouTube cookie:", e);
+}
 
 const queue = new Map();
 
@@ -44,10 +60,18 @@ export default {
             if (ytdl.validateURL(query)) {
                 // ✅ Nếu là link YouTube
                 videoUrl = query;
-                const info = await ytdl.getInfo(videoUrl);
+                const info = await ytdl.getInfo(videoUrl, {
+                    requestOptions: {
+                        headers: {
+                            cookie: process.env.YT_COOKIE || "",
+                            "User-Agent":
+                                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
+                        },
+                    },
+                });
                 title = info.videoDetails.title;
             } else {
-                // 🔎 Nếu là từ khóa → tìm kiếm video đầu tiên
+                // 🔎 Nếu là từ khóa → tìm video đầu tiên
                 const result = await ytSearch(query);
                 const video = result.videos.length > 0 ? result.videos[0] : null;
 
@@ -112,12 +136,16 @@ async function playSong(interaction, song) {
     try {
         console.log("🎵 Phát:", song.title);
 
+        // =========================
+        // 🔊 Lấy stream + ffmpeg decode
+        // =========================
         const stream = ytdl(song.url, {
             filter: "audioonly",
             quality: "highestaudio",
             highWaterMark: 1 << 25,
             requestOptions: {
                 headers: {
+                    cookie: process.env.YT_COOKIE || "",
                     "User-Agent":
                         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/118.0.0.0 Safari/537.36",
                     "Accept-Language": "en-US,en;q=0.9",
@@ -125,24 +153,36 @@ async function playSong(interaction, song) {
             },
         });
 
-        const resource = createAudioResource(stream);
+        // ✅ Chạy ffmpeg-static để decode stream (fix FFmpeg missing)
+        const ffmpegProcess = spawn(ffmpeg, [
+            "-i", "pipe:0",
+            "-analyzeduration", "0",
+            "-loglevel", "0",
+            "-f", "s16le",
+            "-ar", "48000",
+            "-ac", "2",
+            "pipe:1",
+        ], { stdio: ["pipe", "pipe", "ignore"] });
+
+        stream.pipe(ffmpegProcess.stdin);
+
+        const resource = createAudioResource(ffmpegProcess.stdout);
         serverQueue.player.play(resource);
         serverQueue.connection.subscribe(serverQueue.player);
 
         await interaction.editReply(`🎶 Đang phát: **${song.title}**`);
 
-        // Khi phát xong → phát bài tiếp
         serverQueue.player.once(AudioPlayerStatus.Idle, () => {
             serverQueue.songs.shift();
             playSong(interaction, serverQueue.songs[0]);
         });
     } catch (error) {
-        console.error("❌ Lỗi khi phát bài:", error.message);
+        console.error("❌ Lỗi khi phát bài:", error);
         await interaction.editReply(
             `⚠️ Không thể phát bài hát: **${song?.title || "Không xác định"}**`
         );
 
-        // Bỏ qua bài lỗi và phát tiếp bài kế
+        // Bỏ qua bài lỗi và phát bài tiếp
         serverQueue.songs.shift();
         playSong(interaction, serverQueue.songs[0]);
     }
